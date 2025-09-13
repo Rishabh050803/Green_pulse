@@ -34,7 +34,29 @@ def get_building_history(building_id: int, seq_length: int = 24) -> pd.DataFrame
 
 @app.get("/building/{building_id}")
 def get_building_data(building_id: int):
-    """Get all actual and predicted data for a building."""
+    """
+    Get all actual and predicted data for a building.
+
+    Path parameter:
+        building_id (int): The building ID to fetch data for.
+
+    Returns: List of dicts, each with all columns from the database for the building, including:
+        - timestamp (str): ISO timestamp
+        - meter_reading (float): Actual meter reading
+        - predicted_meter_reading (float): Model prediction (may be null for some rows)
+        - All other static and weather features used by the model
+
+    Example response:
+    [
+        {
+            "timestamp": "2016-01-01T00:00:00",
+            "meter_reading": 123.4,
+            "predicted_meter_reading": 120.1,
+            ...
+        },
+        ...
+    ]
+    """
     with sqlite3.connect(DB_PATH) as conn:
         df = pd.read_sql_query(
             f"SELECT * FROM energy_data WHERE building_id = ? ORDER BY timestamp ASC", conn, params=(building_id,)
@@ -52,6 +74,33 @@ class PredictRequest(BaseModel):
 
 @app.post("/predict_future_usage")
 def predict_future_usage_route(req: PredictRequest):
+    """
+    Predict future energy usage for a building for the next N hours.
+    
+    Request JSON body:
+    {
+        "building_id": int,  # Building ID to predict for
+        "user_params": {
+            "air_temperature": float,
+            "cloud_coverage": float,
+            "dew_temperature": float,
+            "sea_level_pressure": float,
+            "wind_speed": float,
+            "floor_count": int
+        },
+        "predict_hours": int,  # Number of hours to predict (default 24)
+        "seq_length": int      # Sequence length for model (default 24)
+    }
+
+    Returns: List of dicts, each with:
+    [
+        {
+            "timestamp": str,  # ISO timestamp for prediction
+            "predicted_meter_reading": float
+        },
+        ...
+    ]
+    """
     model, scaler, le = load_model_and_scaler(MODEL_DIR)
     df = get_building_history(req.building_id, req.seq_length)
     features = [
@@ -82,6 +131,33 @@ class SuggestRequest(BaseModel):
 
 @app.post("/suggest_param_adjustment")
 def suggest_param_adjustment_route(req: SuggestRequest):
+    """
+    Suggest values for dynamic parameters to achieve a target energy usage at the next time step.
+
+    Request JSON body:
+    {
+        "building_id": int,  # Building ID to suggest for
+        "user_params": {
+            "air_temperature": float,
+            "cloud_coverage": float,
+            "dew_temperature": float,
+            "sea_level_pressure": float,
+            "wind_speed": float,
+            "floor_count": int
+        },
+        "target_usage": float,  # Desired meter reading
+        "param_candidates": [str, ...],  # (Optional) Which params to adjust
+        "seq_length": int  # Sequence length for model (default 24)
+    }
+
+    Returns: Dict of {param_name: suggested_value} for each dynamic parameter.
+    Example:
+    {
+        "air_temperature": 21.5,
+        "cloud_coverage": 2.0,
+        ...
+    }
+    """
     model, scaler, le = load_model_and_scaler(MODEL_DIR)
     df = get_building_history(req.building_id, req.seq_length)
     features = [
